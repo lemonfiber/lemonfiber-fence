@@ -110,12 +110,16 @@ jobs:
           docker run --rm --network container:fence-check --cap-drop ALL \
             --entrypoint /bin/sh fence:check -c '
               failed=0
-              for target in 10.0.0.1 172.17.0.1 192.168.1.1 100.64.0.1 169.254.169.254 127.0.0.1 203.0.113.9; do
+              for target in 10.0.0.1 172.17.0.1 192.168.1.1 100.64.0.1 169.254.169.254 127.0.0.1 198.18.0.1 203.0.113.9; do
                 if nc -z -w 2 "$target" 80 2>/dev/null; then
                   echo "::error::$target was reached from behind the fence"
                   failed=1
                 fi
               done
+              if nc -z -w 2 127.0.0.11 80 2>/dev/null; then
+                echo "::error::the resolver was reached on a port other than its own"
+                failed=1
+              fi
               if ! nslookup example.com >/dev/null 2>&1; then
                 echo "::error::a name did not resolve behind the fence"
                 failed=1
@@ -125,6 +129,22 @@ jobs:
                 failed=1
               fi
               exit "$failed"'
+      - name: Refuses to start without the host's own addresses
+        run: |
+          set -euo pipefail
+          for said in unset " , "; do
+            if [ "$said" = unset ]; then
+              set -- fence:check
+            else
+              set -- -e "LEMONFIBER_FENCE_HOST_ADDRESSES=${said}" fence:check
+            fi
+            code=0
+            docker run --rm --network fence-check --cap-drop ALL --cap-add NET_ADMIN "$@" || code=$?
+            if [ "$code" -ne 2 ]; then
+              echo "::error::with the host's addresses ${said}, the fence exited ${code} rather than refusing to start"
+              exit 1
+            fi
+          done
       - name: Reports the rules gone once they are
         run: |
           set -euo pipefail

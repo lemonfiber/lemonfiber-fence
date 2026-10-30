@@ -12,10 +12,6 @@ mod rules;
 
 use std::process::ExitCode;
 
-/// The setting naming the host's own addresses, which the fence refuses beside every
-/// private range.
-const HOST_ADDRESSES: &str = "LEMONFIBER_FENCE_HOST_ADDRESSES";
-
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         None => fence(),
@@ -35,11 +31,11 @@ fn main() -> ExitCode {
 
 /// Put the rules in place, then hold the namespace.
 fn fence() -> ExitCode {
-    let said = std::env::var(HOST_ADDRESSES).unwrap_or_default();
-    let hosts = match rules::host_addresses(&said) {
+    let said = std::env::var(rules::HOST_ADDRESSES).ok();
+    let hosts = match rules::host_addresses(said.as_deref()) {
         Ok(hosts) => hosts,
         Err(why) => {
-            eprintln!("fence: {HOST_ADDRESSES}: {why}");
+            eprintln!("fence: {why}");
             return ExitCode::from(2);
         }
     };

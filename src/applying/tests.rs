@@ -39,16 +39,21 @@ fn ran(succeeded: bool, stdout: &str, stderr: &str) -> Ran {
     }
 }
 
+/// The table as the kernel lists it once the ruleset is in force.
+const LISTED: &str = "table inet lemonfiber_fence {
+\tset refused_v4 {
+\t}
+\tset refused_v6 {
+\t}
+\tchain output {
+\t\tip daddr @refused_v4 reject with icmp port-unreachable
+\t\tip6 daddr @refused_v6 reject with icmpv6 port-unreachable
+\t}
+}";
+
 #[test]
 fn a_ruleset_is_handed_to_nft_and_read_back_before_it_counts() {
-    let nft = Fake::answering(vec![
-        Ok(ran(true, "", "")),
-        Ok(ran(
-            true,
-            "table inet lemonfiber_fence {\n\tchain output {",
-            "",
-        )),
-    ]);
+    let nft = Fake::answering(vec![Ok(ran(true, "", "")), Ok(ran(true, LISTED, ""))]);
 
     assert_eq!(applied(&nft, "the rules"), Ok(()));
     let asked = nft.asked.borrow();
@@ -88,6 +93,20 @@ fn a_table_the_kernel_does_not_list_is_not_in_force() {
     );
     let emptied = Fake::answering(vec![Ok(ran(true, "table inet lemonfiber_fence {\n}", ""))]);
     assert!(holding(&emptied).is_err());
+    for missing in [
+        "set refused_v4",
+        "set refused_v6",
+        "chain output",
+        "ip daddr @refused_v4 reject",
+        "ip6 daddr @refused_v6 reject",
+    ] {
+        let without = LISTED.replace(missing, "");
+        let held = Fake::answering(vec![Ok(ran(true, &without, ""))]);
+        assert!(
+            holding(&held).is_err_and(|why| why.contains(missing)),
+            "a table without {missing} is in force"
+        );
+    }
     let accepted_then_lost = Fake::answering(vec![Ok(ran(true, "", "")), Ok(ran(false, "", ""))]);
     assert!(applied(&accepted_then_lost, "x").is_err());
 }

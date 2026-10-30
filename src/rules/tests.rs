@@ -9,49 +9,92 @@ fn addresses(said: &[&str]) -> Vec<IpAddr> {
 #[test]
 fn host_addresses_are_read_past_commas_and_whitespace() {
     assert_eq!(
-        host_addresses(" 203.0.113.7, 2001:db8::7\n198.51.100.1,,"),
+        host_addresses(Some(" 203.0.113.7, 2001:db8::7\n198.51.100.1,,")),
         Ok(addresses(&["203.0.113.7", "2001:db8::7", "198.51.100.1"]))
     );
-    assert_eq!(host_addresses(""), Ok(Vec::new()));
+}
+
+/// A fence handed no host address would let the service reach the host at an address
+/// no range covers, so it refuses to start rather than fence without one.
+#[test]
+fn no_host_address_refuses_to_start() {
+    assert_eq!(
+        host_addresses(None),
+        Err(
+            "LEMONFIBER_FENCE_HOST_ADDRESSES is not set, so the host's own addresses are not known"
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        host_addresses(Some(" , ")),
+        Err("LEMONFIBER_FENCE_HOST_ADDRESSES holds no address".to_owned())
+    );
 }
 
 #[test]
 fn an_entry_that_is_not_an_address_refuses_the_whole_list() {
-    let refused = host_addresses("203.0.113.7, router.lan");
+    let refused = host_addresses(Some("203.0.113.7, router.lan"));
     assert_eq!(
         refused,
         Err("\"router.lan\" is not an IP address the fence can refuse".to_owned())
     );
-    assert!(host_addresses("10.0.0.0/8").is_err());
+    assert!(host_addresses(Some("10.0.0.0/8")).is_err());
 }
 
+/// Every range the core's check on a name refuses is refused here too, read from the
+/// same list, and so is every range whose addresses carry an IPv4 one.
 #[test]
-fn every_private_range_is_refused_and_the_resolver_and_answers_pass() {
+fn every_range_nothing_reaches_is_refused_from_the_one_list() {
     let rules = ruleset(&[]);
+    for (network, prefix) in lemonfiber_outward::INTERNAL_V4 {
+        assert!(
+            rules.contains(&format!("{network}/{prefix}")),
+            "{network}/{prefix}:\n{rules}"
+        );
+    }
+    for (network, prefix) in lemonfiber_outward::INTERNAL_V6
+        .iter()
+        .chain(&lemonfiber_outward::CARRYING_V6)
+    {
+        assert!(
+            rules.contains(&format!("{network}/{prefix}")),
+            "{network}/{prefix}:\n{rules}"
+        );
+    }
     for range in [
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "100.64.0.0/10",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
-        "224.0.0.0/4",
+        "2002::/16",
+        "2001::/32",
+        "64:ff9b::/96",
+        "64:ff9b:1::/48",
+        "::/96",
+        "100::/64",
+        "192.0.0.0/24",
+        "192.0.2.0/24",
+        "198.18.0.0/15",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
         "::1/128",
-        "fc00::/7",
-        "fe80::/10",
-        "ff00::/8",
-        "::ffff:0:0/96",
     ] {
         assert!(rules.contains(range), "{range} is not refused:\n{rules}");
     }
-    let accepted = rules.find("ip daddr 127.0.0.11 accept");
-    let refused = rules.find("ip daddr @refused_v4 reject");
+}
+
+/// The resolver is let through on its port alone, before the engine moves it, and
+/// nothing else to it; answers pass before anything is refused.
+#[test]
+fn only_the_resolvers_port_passes_and_answers_pass_first() {
+    let rules = ruleset(&[]);
     assert!(
-        accepted.is_some() && accepted < refused,
-        "the resolver is let through before anything is refused:\n{rules}"
+        rules.contains("type filter hook output priority mangle;"),
+        "{rules}"
     );
+    assert!(!rules.contains("ip daddr 127.0.0.11 accept"), "{rules}");
     let answered = rules.find("ct state established,related accept");
-    assert!(answered.is_some() && answered < accepted, "{rules}");
+    let udp = rules.find("ip daddr 127.0.0.11 udp dport 53 accept");
+    let tcp = rules.find("ip daddr 127.0.0.11 tcp dport 53 accept");
+    let refused = rules.find("ip daddr @refused_v4 reject");
+    assert!(answered.is_some() && answered < udp, "{rules}");
+    assert!(udp.is_some() && tcp.is_some() && tcp < refused, "{rules}");
     assert!(rules.contains("ip6 daddr @refused_v6 reject"), "{rules}");
 }
 
@@ -63,8 +106,8 @@ fn each_host_address_joins_the_set_of_its_family() {
         .next()
         .unwrap_or_default()
         .to_owned();
-    assert!(v4.contains("240.0.0.0/4, 203.0.113.7 }"), "{rules}");
-    assert!(rules.contains("ff00::/8, 2001:db8::7 }"), "{rules}");
+    assert!(v4.ends_with(", 203.0.113.7 }\n\t}\n\t"), "{rules}");
+    assert!(rules.contains(", 2001:db8::7 }"), "{rules}");
 }
 
 #[test]

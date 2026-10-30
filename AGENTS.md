@@ -14,11 +14,11 @@ The fence: the container lemonfiber writes beside a service that fetches whateve
 
 ## The one rule you cannot break here
 
-**The fence fails closed.** It reports healthy only once the kernel lists its table, and exits where the rules cannot be installed or a host address it is handed cannot be read, so the service behind it never starts in a namespace the rules do not hold. A ruleset that lets a new connection through to loopback, a private, carrier-grade NAT, link-local, metadata, multicast or unique-local address, or to a host address it was handed, is a defect however it is reached. The engine's resolver and the answers to connections others opened are the only things let through to such an address.
+**The fence fails closed.** It reports healthy only once the kernel lists its table, and exits where the rules cannot be installed, it is handed no host address, or one it is handed cannot be read, so the service behind it never starts in a namespace the rules do not hold. A ruleset that lets a new connection through to loopback, a private, carrier-grade NAT, link-local, metadata, multicast or unique-local address, or to a host address it was handed, is a defect however it is reached. The engine's resolver on port 53 and the answers to connections others opened are the only things let through to such an address.
 
 ## Code standards (enforced)
 
 - `unsafe` is **forbidden**. No `unwrap`/`expect`/`panic`/`todo` in non-test code.
 - **No lint suppressions in `src/`**: change the code or the rule, never `#[allow]`.
-- The ranges the fence refuses are this image's alone. Nothing a manifest says widens or narrows them.
+- The ranges the fence refuses are read from the core's `lemonfiber-outward`, the list its check on a name reads, plus the IPv6 ranges carrying an IPv4 address. Nothing a manifest says widens or narrows them.
 - Every line outside `main.rs` is covered by a test.

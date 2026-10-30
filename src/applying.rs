@@ -81,20 +81,32 @@ pub fn applied(nft: &dyn Nft, ruleset: &str) -> Result<(), String> {
     holding(nft)
 }
 
+/// What the kernel's listing of the fence's table holds while the rules are in force.
+const IN_FORCE: [&str; 5] = [
+    "set refused_v4",
+    "set refused_v6",
+    "chain output",
+    "ip daddr @refused_v4 reject",
+    "ip6 daddr @refused_v6 reject",
+];
+
 /// Whether the fence's table is in force, read from the kernel.
 ///
 /// # Errors
 ///
-/// Why it is not: `nft` could not run, or the table or its output chain is missing.
+/// Why it is not: `nft` could not run, the table is missing, or it lacks one of its
+/// sets, its chain, or a rule refusing either set.
 pub fn holding(nft: &dyn Nft) -> Result<(), String> {
     let ran = nft.run(&["list", "table", "inet", TABLE], "")?;
-    if ran.succeeded && ran.stdout.contains("chain output") {
-        Ok(())
-    } else {
-        Err(format!(
+    if !ran.succeeded {
+        return Err(format!(
             "the table {TABLE} is not in force: {}",
             ran.stderr.trim()
-        ))
+        ));
+    }
+    match IN_FORCE.iter().find(|held| !ran.stdout.contains(*held)) {
+        Some(missing) => Err(format!("the table {TABLE} lacks {missing}")),
+        None => Ok(()),
     }
 }
 
