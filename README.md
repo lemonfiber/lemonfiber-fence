@@ -39,6 +39,7 @@ the service behind it never starts unfenced.
 | --- | --- |
 | Settings | `LEMONFIBER_FENCE_HOST_ADDRESSES`: the host's own addresses, separated by commas or spaces, refused beside every private range. Required: the fence refuses to start without at least one |
 | Privilege | `NET_ADMIN` alone, which lemonfiber grants the fence and never the service behind it |
+| The host's addresses | `fence addresses`, run once by lemonfiber on the engine's host network with every capability dropped and a read-only root filesystem, prints each address the host holds as its own, one to a line: every IPv4 address `/proc/net/fib_trie` marks local but the unspecified one, and every IPv6 address `/proc/net/if_inet6` lists. It exits non-zero where it finds none, or where a table cannot be read or holds a line that is not an address |
 | Health check | `fence health`, which asks the kernel whether the table, both its sets, its chain and the rules refusing each set are still in force |
 | The service behind it | Written into the fence's network namespace, started once the fence is healthy, and restarted with it |
 

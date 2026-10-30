@@ -5,8 +5,10 @@
 //! place, reads them back, and then waits for as long as the namespace is wanted. It
 //! exits where any of that fails, so the service written behind it never starts in a
 //! namespace the rules do not hold. Run as `fence health`, it asks the kernel whether
-//! the rules are still in force.
+//! the rules are still in force. Run as `fence addresses`, it prints the addresses of the
+//! host whose network it is on and installs nothing.
 
+mod addresses;
 mod applying;
 mod rules;
 
@@ -22,8 +24,23 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("addresses") => match addresses::asked(|path| std::fs::read_to_string(path)) {
+            Ok(held) => {
+                for address in held {
+                    println!("{address}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(why) => {
+                eprintln!("fence: {why}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
-            eprintln!("fence: {other:?} is not a command; run it with none, or with `health`");
+            eprintln!(
+                "fence: {other:?} is not a command; run it with none, with `health` or with \
+                 `addresses`"
+            );
             ExitCode::from(2)
         }
     }
