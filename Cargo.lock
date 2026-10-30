@@ -238,7 +238,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "lemonfiber-error"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=51ee9644e380bd3a512e1d6d882b417fbf03dc6f#51ee9644e380bd3a512e1d6d882b417fbf03dc6f"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=99865f3c4236b84778a369ecef888b15ca28e89f#99865f3c4236b84778a369ecef888b15ca28e89f"
 dependencies = [
  "schemars",
  "serde",
@@ -254,7 +254,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-manifest"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=51ee9644e380bd3a512e1d6d882b417fbf03dc6f#51ee9644e380bd3a512e1d6d882b417fbf03dc6f"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=99865f3c4236b84778a369ecef888b15ca28e89f#99865f3c4236b84778a369ecef888b15ca28e89f"
 dependencies = [
  "schemars",
  "serde",
@@ -266,7 +266,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-outward"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=51ee9644e380bd3a512e1d6d882b417fbf03dc6f#51ee9644e380bd3a512e1d6d882b417fbf03dc6f"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=99865f3c4236b84778a369ecef888b15ca28e89f#99865f3c4236b84778a369ecef888b15ca28e89f"
 dependencies = [
  "async-trait",
  "lemonfiber-ports",
@@ -277,7 +277,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-ports"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=51ee9644e380bd3a512e1d6d882b417fbf03dc6f#51ee9644e380bd3a512e1d6d882b417fbf03dc6f"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=99865f3c4236b84778a369ecef888b15ca28e89f#99865f3c4236b84778a369ecef888b15ca28e89f"
 dependencies = [
  "async-trait",
  "base64",

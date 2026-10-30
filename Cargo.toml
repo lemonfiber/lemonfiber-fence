@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 # The ranges nothing reaches, from the core at the commit the train releases this build
 # with (ADR-0033), so the fence and the core's check on a name refuse the same ones.
-lemonfiber-outward = { git = "https://github.com/lemonfiber/lemonfiber", rev = "51ee9644e380bd3a512e1d6d882b417fbf03dc6f" }
+lemonfiber-outward = { git = "https://github.com/lemonfiber/lemonfiber", rev = "99865f3c4236b84778a369ecef888b15ca28e89f" }
 
 [lints.rust]
 unsafe_code = "forbid"
