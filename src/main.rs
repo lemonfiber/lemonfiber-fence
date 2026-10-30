@@ -24,7 +24,9 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("addresses") => match addresses::asked(|path| std::fs::read_to_string(path)) {
+        Some("addresses") => match addresses::asked(&|path| std::fs::read_to_string(path), &|| {
+            listed(&addresses::IP)
+        }) {
             Ok(held) => {
                 for address in held {
                     println!("{address}");
@@ -64,4 +66,17 @@ fn fence() -> ExitCode {
     loop {
         std::thread::park();
     }
+}
+
+/// What `program` wrote, where it ran and succeeded.
+fn listed(program: &[&str]) -> Result<String, String> {
+    let (name, args) = program.split_first().ok_or("no program was named")?;
+    let output = std::process::Command::new(name)
+        .args(args)
+        .output()
+        .map_err(|why| why.to_string())?;
+    if !output.status.success() {
+        return Err(format!("it exited {}", output.status));
+    }
+    String::from_utf8(output.stdout).map_err(|_| "it wrote what is not text".to_owned())
 }
