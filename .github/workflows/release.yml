@@ -1,0 +1,28 @@
+# Publish the fence's image from every commit on main and from each tag the release
+# train cuts, through spec's shared `rust-service-release` (ADR-0033 §3, §4; OPS-R90).
+# No plugin declares the fence, so it holds no plugin.toml: `pins: bundle` has each
+# train tag move the bundle's own `[fence]` table in lemonfiber-plugins through
+# `bundle-image-pin` (ARCH-R363). The service id is this repository's name without
+# `lemonfiber-` (ADR-0033 §1).
+name: release
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: lemonfiber/spec/.github/workflows/rust-service-release.yml@cd72a083d5f0adc22347c4839d50cc99b9cb822f # v1.0.129
+    with:
+      pins: bundle
+    secrets:
+      RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
