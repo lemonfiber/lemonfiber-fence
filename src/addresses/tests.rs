@@ -131,6 +131,7 @@ fn a_local_range_is_read_only_where_the_fence_refuses_it_anyway() {
     for (table, range) in [
         ("Id 100", "203.0.112.0/23"),
         ("Local", "0.0.0.0/0"),
+        ("Main", "0.0.0.0/0"),
         ("Main", "8.8.8.0/24"),
     ] {
         let refused = read(&ranged(table, range), None, &listed)
