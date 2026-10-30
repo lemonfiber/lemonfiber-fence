@@ -1,0 +1,30 @@
+# Hold the crate to 100% line coverage, scan it with SonarQube Cloud, and gate
+# pull requests on zero SonarCloud issues, through spec's shared
+# `rust-coverage` (Q-R61, Q-R64).
+name: sonar
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+permissions:
+  contents: read
+# A pull request pushed again cancels the run on its old head, which nobody
+# will read and which holds runners the org shares (Q-R75). Every other event
+# (a push to main, a tag, a merge queue) is grouped by its own run, so it is
+# never cancelled and never cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+jobs:
+  sonar:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: lemonfiber/spec/.github/workflows/rust-coverage.yml@cb2c0640a7d2a8e7bd309680c682f792f1fdcf62 # v1.0.126
+    with:
+      # A ceiling rather than an allowance: it may not rise past what stands
+      # against `main`, and at zero the gate refuses the first issue.
+      allowed-open: 0
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
