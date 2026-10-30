@@ -145,6 +145,27 @@ jobs:
               exit 1
             fi
           done
+      - name: Answers the host's own addresses on the host's network, holding no capability
+        run: |
+          set -euo pipefail
+          said=$(docker run --rm --network host --read-only --cap-drop ALL \
+            --security-opt no-new-privileges fence:check addresses)
+          if [ -z "$said" ]; then
+            echo "::error::the fence answered no address of the host"
+            exit 1
+          fi
+          expected=$(docker run --rm --network host --entrypoint /bin/sh fence:check -c \
+            "ip -o addr | awk '{split(\$4, a, \"/\"); print a[1]}'")
+          for address in $expected; do
+            if ! grep -qxF "$address" <<<"$said"; then
+              echo "::error::the host holds ${address}, and the fence did not answer it"
+              exit 1
+            fi
+          done
+          if grep -vqE '^[0-9a-f.:]+$' <<<"$said"; then
+            echo "::error::the fence answered a line that is not an address: ${said}"
+            exit 1
+          fi
       - name: Reports the rules gone once they are
         run: |
           set -euo pipefail
