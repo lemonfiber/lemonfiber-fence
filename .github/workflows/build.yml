@@ -1,0 +1,155 @@
+# The crate and the image, checked on every change: format, lints, tests, the
+# toolchain the crate promises, its dependency policy, and an image build.
+name: build
+on:
+  pull_request:
+  merge_group:
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      # The tests run once, under coverage in sonar.yml, whose `coverage` job
+      # fails on a failing test as this step did.
+
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The version the crate promises
+        id: promised
+        run: |
+          version="$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
+          if [ -z "$version" ]; then
+            echo "::error file=Cargo.toml::no rust-version is declared, so there is no promise to collect on"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95.0
+        with:
+          toolchain: ${{ steps.promised.outputs.version }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: The crate builds on the version it promises
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.promised.outputs.version }}
+        run: cargo check --locked
+
+  # cargo-deny as a binary rather than through its action, which builds a Docker
+  # image from a Docker Hub base on every run and fails whenever Hub rate-limits
+  # the runners. The version and the arguments are the ones that action ran.
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955 # cargo-deny
+        with:
+          tool: cargo-deny@0.20.2
+      - name: The dependencies are allowed
+        run: cargo deny --log-level warn --manifest-path ./Cargo.toml --all-features check
+
+  # The image builds, runs with nothing but `NET_ADMIN`, as lemonfiber runs it, and
+  # answers its own health check once its rules are in force. A service written into
+  # its namespace on a network of its own, as the stack's are, is then refused every
+  # private address and reaches a name and the internet. Nothing is pushed.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: docker build -t fence:check .
+      - name: Holds its namespace to the rules, and answers its health
+        run: |
+          set -euo pipefail
+          docker network create fence-check >/dev/null
+          docker run -d --name fence-check --network fence-check --read-only \
+            --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges \
+            -e LEMONFIBER_FENCE_HOST_ADDRESSES=203.0.113.9 fence:check
+          healthy=no
+          for _ in $(seq 1 20); do
+            if docker exec fence-check /usr/local/bin/fence health; then
+              healthy=yes
+              break
+            fi
+            sleep 1
+          done
+          if [ "$healthy" != yes ]; then
+            docker logs fence-check
+            echo "::error::the fence did not report its rules in force"
+            exit 1
+          fi
+      - name: A service behind it is refused every private address and reaches the internet
+        run: |
+          set -euo pipefail
+          docker run --rm --network container:fence-check --cap-drop ALL \
+            --entrypoint /bin/sh fence:check -c '
+              failed=0
+              for target in 10.0.0.1 172.17.0.1 192.168.1.1 100.64.0.1 169.254.169.254 127.0.0.1 198.18.0.1 203.0.113.9; do
+                if nc -z -w 2 "$target" 80 2>/dev/null; then
+                  echo "::error::$target was reached from behind the fence"
+                  failed=1
+                fi
+              done
+              if nc -z -w 2 127.0.0.11 80 2>/dev/null; then
+                echo "::error::the resolver was reached on a port other than its own"
+                failed=1
+              fi
+              if ! nslookup example.com >/dev/null 2>&1; then
+                echo "::error::a name did not resolve behind the fence"
+                failed=1
+              fi
+              if ! wget -q -T 10 -O /dev/null https://example.com; then
+                echo "::error::the internet was not reached behind the fence"
+                failed=1
+              fi
+              exit "$failed"'
+      - name: Refuses to start without the host's own addresses
+        run: |
+          set -euo pipefail
+          for said in unset " , "; do
+            if [ "$said" = unset ]; then
+              set -- fence:check
+            else
+              set -- -e "LEMONFIBER_FENCE_HOST_ADDRESSES=${said}" fence:check
+            fi
+            code=0
+            docker run --rm --network fence-check --cap-drop ALL --cap-add NET_ADMIN "$@" || code=$?
+            if [ "$code" -ne 2 ]; then
+              echo "::error::with the host's addresses ${said}, the fence exited ${code} rather than refusing to start"
+              exit 1
+            fi
+          done
+      - name: Reports the rules gone once they are
+        run: |
+          set -euo pipefail
+          docker exec fence-check nft delete table inet lemonfiber_fence
+          if docker exec fence-check /usr/local/bin/fence health; then
+            echo "::error::the fence reported rules in force that are gone"
+            exit 1
+          fi

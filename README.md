@@ -21,21 +21,25 @@ service runs in, whatever led the service there.
 ## What it does
 
 At start it installs nftables rules in the namespace it holds. Every new
-connection to loopback, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
-`100.64.0.0/10`, `169.254.0.0/16`, multicast, `::1`, `fc00::/7`, `fe80::/10`,
-`ff00::/8` and each of the host's own addresses is refused. The engine's resolver
-at `127.0.0.11` is let through, so names still resolve, and so are the answers to
-connections other services opened. It reads the rules back, reports healthy, and
-then holds the namespace. Where any of that fails it exits, so the service behind
-it never starts unfenced.
+connection is refused to each range the core's own check on a name refuses
+(loopback, the private and carrier-grade NAT ranges, link-local and metadata,
+documentation, benchmarking, multicast and reserved, IPv6 unique-local,
+link-local and site-local), to every IPv6 range whose addresses carry an IPv4 one
+(mapped, compatible, NAT64, 6to4 and Teredo), and to each of the host's own
+addresses. The ranges are read from the core's `lemonfiber-outward`, so the two
+cannot disagree. The engine's resolver at `127.0.0.11` is let through on port 53
+alone, so names still resolve, and so are the answers to connections other
+services opened. It reads the rules back, reports healthy, and then holds the
+namespace. Where any of that fails, or it is handed no host address, it exits, so
+the service behind it never starts unfenced.
 
 ## How the stack runs it
 
 | | |
 | --- | --- |
-| Settings | `LEMONFIBER_FENCE_HOST_ADDRESSES`: the host's own addresses, separated by commas or spaces, refused beside every private range |
+| Settings | `LEMONFIBER_FENCE_HOST_ADDRESSES`: the host's own addresses, separated by commas or spaces, refused beside every private range. Required: the fence refuses to start without at least one |
 | Privilege | `NET_ADMIN` alone, which lemonfiber grants the fence and never the service behind it |
-| Health check | `fence health`, which asks the kernel whether the rules are still in force |
+| Health check | `fence health`, which asks the kernel whether the table, both its sets, its chain and the rules refusing each set are still in force |
 | The service behind it | Written into the fence's network namespace, started once the fence is healthy, and restarted with it |
 
 ## Building and testing

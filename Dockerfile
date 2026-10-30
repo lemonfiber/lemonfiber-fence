@@ -1,0 +1,22 @@
+# The fence's image: the program that installs the rules, and nftables to install them.
+#
+# The build stage compiles a static binary for the platform being built. The image
+# holds that binary, nftables and tini, and runs tini as its first process, so the
+# fence holding the namespace ends on the engine's stop signal rather than waiting out
+# the stop timeout. It runs as root because installing rules needs `NET_ADMIN`, which
+# lemonfiber grants this container alone; the service behind it shares the namespace
+# and holds no capability. Its health check asks the kernel whether the rules are in
+# force.
+
+FROM rust:1.99.1-alpine3.22@sha256:731f64e16c12af70970d9a3655eecb1eecab4898352f09688a8e5ca2ab8b77c5 AS build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --locked && cp target/release/fence /fence
+
+FROM alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+RUN apk add --no-cache nftables tini
+COPY --from=build /fence /usr/local/bin/fence
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 CMD ["/usr/local/bin/fence", "health"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/fence"]
