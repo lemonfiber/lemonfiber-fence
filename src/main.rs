@@ -6,10 +6,13 @@
 //! exits where any of that fails, so the service written behind it never starts in a
 //! namespace the rules do not hold. Run as `fence health`, it asks the kernel whether
 //! the rules are still in force. Run as `fence addresses`, it prints the addresses of the
-//! host whose network it is on and installs nothing.
+//! host whose network it is on and installs nothing. Run as `fence render-group`, it
+//! prints the id of the group owning the host's render devices, or nothing where there
+//! are none, and installs nothing.
 
 mod addresses;
 mod applying;
+mod render_group;
 mod rules;
 
 use std::process::ExitCode;
@@ -38,10 +41,22 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("render-group") => match render_group::asked(&render_group::listed) {
+            Ok(group) => {
+                if let Some(group) = group {
+                    println!("{group}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(why) => {
+                eprintln!("fence: {why}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
             eprintln!(
-                "fence: {other:?} is not a command; run it with none, with `health` or with \
-                 `addresses`"
+                "fence: {other:?} is not a command; run it with none, with `health`, with \
+                 `addresses` or with `render-group`"
             );
             ExitCode::from(2)
         }
