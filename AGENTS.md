@@ -14,7 +14,7 @@ The fence: the container lemonfiber writes beside a service that fetches whateve
 
 ## The one rule you cannot break here
 
-**The fence fails closed.** It reports healthy only once the kernel lists its table, and exits where the rules cannot be installed, it is handed no host address, or one it is handed cannot be read, so the service behind it never starts in a namespace the rules do not hold. A ruleset that lets a new connection through to loopback, a private, carrier-grade NAT, link-local, metadata, multicast or unique-local address, or to a host address it was handed, is a defect however it is reached. The engine's resolver on port 53 and the answers to connections others opened are the only things let through to such an address.
+**The fence fails closed.** It reports healthy only once the kernel lists its table, and exits where the rules cannot be installed, it is handed no host address, or one it is handed cannot be read, so the service behind it never starts in a namespace the rules do not hold. A ruleset that lets a new connection through to loopback, a private, carrier-grade NAT, link-local, metadata, multicast or unique-local address, or to a host address it was handed, is a defect however it is reached. A connection out of the namespace's own loopback interface to any address but the resolver's, the engine's resolver on port 53, and the answers to connections others opened are the only things let through to such an address.
 
 ## Code standards (enforced)
 
