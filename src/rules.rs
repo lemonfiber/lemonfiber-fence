@@ -3,9 +3,12 @@
 //! Every new connection the namespace opens to an address no stranger's page should
 //! reach is refused: every range the core's check on a name refuses, read from the same
 //! list, every IPv6 range whose addresses carry an IPv4 one, and the host's own
-//! addresses. The engine's resolver is let through on its port alone, so names still
-//! resolve, and so are the answers to connections other services opened, so the
-//! service behind the fence still answers whoever asks it.
+//! addresses. A connection on the namespace's own loopback interface to any address but
+//! the resolver's is let through, since it reaches nothing but the namespace itself, so
+//! a service whose parts talk to each other over it still runs. The engine's resolver is
+//! let through on its port alone, so names still resolve, and so are the answers to
+//! connections other services opened, so the service behind the fence still answers
+//! whoever asks it.
 //!
 //! The chain runs before the engine moves the resolver's port, which it does at
 //! `dstnat`, so the port it matches is the one the service asked for.
@@ -14,6 +17,9 @@ use std::net::IpAddr;
 
 /// The table the fence installs, by the name it is listed under.
 pub const TABLE: &str = "lemonfiber_fence";
+
+/// The namespace's own loopback interface.
+const LOOPBACK: &str = "lo";
 
 /// The address of the engine's own resolver inside a container's namespace.
 const RESOLVER: &str = "127.0.0.11";
@@ -87,6 +93,8 @@ pub fn ruleset(hosts: &[IpAddr]) -> String {
          \tchain output {{\n\
          \t\ttype filter hook output priority mangle; policy accept;\n\
          \t\tct state established,related accept\n\
+         \t\toif \"{LOOPBACK}\" ip daddr != {RESOLVER} accept\n\
+         \t\toif \"{LOOPBACK}\" meta nfproto ipv6 accept\n\
          \t\tip daddr {RESOLVER} udp dport 53 accept\n\
          \t\tip daddr {RESOLVER} tcp dport 53 accept\n\
          \t\tip daddr @refused_v4 reject\n\

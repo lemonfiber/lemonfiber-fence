@@ -117,3 +117,18 @@ fn applying_it_again_replaces_the_table_rather_than_adding_beside_it() {
         "table inet {TABLE}\ndelete table inet {TABLE}\ntable inet {TABLE} {{"
     )));
 }
+
+/// A connection the namespace opens on its own loopback interface passes, but to the
+/// resolver's address, which keeps its one port; one leaving the namespace is still
+/// refused.
+#[test]
+fn the_namespaces_own_loopback_passes_but_to_the_resolver() {
+    let rules = ruleset(&[]);
+    let v4 = rules.find("oif \"lo\" ip daddr != 127.0.0.11 accept");
+    let v6 = rules.find("oif \"lo\" meta nfproto ipv6 accept");
+    let refused = rules.find("ip daddr @refused_v4 reject");
+    assert!(v4.is_some() && v4 < refused, "{rules}");
+    assert!(v6.is_some() && v6 < refused, "{rules}");
+    assert!(!rules.contains("oif \"lo\" accept"), "{rules}");
+    assert!(rules.contains("127.0.0.0/8"), "{rules}");
+}

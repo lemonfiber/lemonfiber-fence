@@ -27,11 +27,14 @@ documentation, benchmarking, multicast and reserved, IPv6 unique-local,
 link-local and site-local), to every IPv6 range whose addresses carry an IPv4 one
 (mapped, compatible, NAT64, 6to4 and Teredo), and to each of the host's own
 addresses. The ranges are read from the core's `lemonfiber-outward`, so the two
-cannot disagree. The engine's resolver at `127.0.0.11` is let through on port 53
-alone, so names still resolve, and so are the answers to connections other
-services opened. It reads the rules back, reports healthy, and then holds the
-namespace. Where any of that fails, or it is handed no host address, it exits, so
-the service behind it never starts unfenced.
+cannot disagree. A connection on the namespace's own loopback interface to any
+address but the resolver's is let through, since it reaches nothing outside the
+namespace, so a service whose parts talk to each other over it still runs. The
+engine's resolver at `127.0.0.11` is let through on port 53 alone, so names still
+resolve, and so are the answers to connections other services opened. It reads
+the rules back, reports healthy, and then holds the namespace. Where any of that
+fails, or it is handed no host address, it exits, so the service behind it never
+starts unfenced.
 
 ## How the stack runs it
 
