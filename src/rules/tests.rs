@@ -124,11 +124,11 @@ fn applying_it_again_replaces_the_table_rather_than_adding_beside_it() {
 #[test]
 fn the_namespaces_own_loopback_passes_but_to_the_resolver() {
     let rules = ruleset(&[]);
-    let v4 = rules.find("oif \"lo\" ip daddr != 127.0.0.11 accept");
-    let v6 = rules.find("oif \"lo\" meta nfproto ipv6 accept");
+    let v4 = rules.find("\toif \"lo\" ip daddr != 127.0.0.11 accept");
+    let v6 = rules.find("\toif \"lo\" meta nfproto ipv6 accept");
     let refused = rules.find("ip daddr @refused_v4 reject");
     assert!(v4.is_some() && v4 < refused, "{rules}");
     assert!(v6.is_some() && v6 < refused, "{rules}");
-    assert!(!rules.contains("oif \"lo\" accept"), "{rules}");
+    assert!(!rules.contains("\toif \"lo\" accept"), "{rules}");
     assert!(rules.contains("127.0.0.0/8"), "{rules}");
 }
