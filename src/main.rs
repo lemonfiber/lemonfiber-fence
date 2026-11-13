@@ -5,10 +5,12 @@
 //! place, reads them back, and then waits for as long as the namespace is wanted. It
 //! exits where any of that fails, so the service written behind it never starts in a
 //! namespace the rules do not hold. Run as `fence health`, it asks the kernel whether
-//! the rules are still in force. Run as `fence addresses`, it prints the addresses of the
-//! host whose network it is on and installs nothing. Run as `fence render-group`, it
-//! prints the id of the group owning the host's render devices, or nothing where there
-//! are none, and installs nothing.
+//! the rules are still in force. Run as `fence nftables`, it puts the same rules in place
+//! under a table of its own, reads them back and takes them away again, and prints
+//! `held` where all of that succeeded and why not where it did not. Run as `fence
+//! addresses`, it prints the addresses of the host whose network it is on and installs
+//! nothing. Run as `fence render-group`, it prints the id of the group owning the host's
+//! render devices, or nothing where there are none, and installs nothing.
 
 mod addresses;
 mod applying;
@@ -20,10 +22,20 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         None => fence(),
-        Some("health") => match applying::holding(&applying::NFT) {
+        Some("health") => match applying::holding(&applying::NFT, rules::TABLE) {
             Ok(()) => ExitCode::SUCCESS,
             Err(why) => {
                 eprintln!("fence: {why}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("nftables") => match applying::probed(&applying::NFT) {
+            Ok(()) => {
+                println!("{}", applying::HELD);
+                ExitCode::SUCCESS
+            }
+            Err(why) => {
+                println!("{why}");
                 ExitCode::FAILURE
             }
         },
@@ -56,7 +68,7 @@ fn main() -> ExitCode {
         Some(other) => {
             eprintln!(
                 "fence: {other:?} is not a command; run it with none, with `health`, with \
-                 `addresses` or with `render-group`"
+                 `nftables`, with `addresses` or with `render-group`"
             );
             ExitCode::from(2)
         }
@@ -73,7 +85,11 @@ fn fence() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if let Err(why) = applying::applied(&applying::NFT, &rules::ruleset(&hosts)) {
+    if let Err(why) = applying::applied(
+        &applying::NFT,
+        rules::TABLE,
+        &rules::ruleset(rules::TABLE, &hosts),
+    ) {
         eprintln!("fence: {why}");
         return ExitCode::FAILURE;
     }

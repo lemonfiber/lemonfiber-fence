@@ -1,4 +1,5 @@
-//! Putting the ruleset in place, and asking whether it still holds.
+//! Putting the ruleset in place, asking whether it still holds, and asking whether a
+//! namespace can hold it at all.
 //!
 //! The rules go in through `nft`, the one program the image carries beside the fence,
 //! and are read back before the fence calls itself ready: a ruleset `nft` accepted and
@@ -7,7 +8,7 @@
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
-use crate::rules::TABLE;
+use crate::rules::{ruleset, PROBE};
 
 /// What running `nft` came to: whether it succeeded, and what it printed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,18 +68,40 @@ fn failed(program: &str) -> impl Fn(std::io::Error) -> String + '_ {
     move |why| format!("{program} could not be run: {why}")
 }
 
-/// Put `ruleset` in place and read it back.
+/// What `fence nftables` prints where the namespace it ran in held the rules.
+pub const HELD: &str = "held";
+
+/// Put `rules` in place and read `table` back.
 ///
 /// # Errors
 ///
 /// Why the rules are not in force: `nft` could not run, refused the ruleset, or the
 /// table is not there once it accepted it.
-pub fn applied(nft: &dyn Nft, ruleset: &str) -> Result<(), String> {
-    let ran = nft.run(&["-f", "-"], ruleset)?;
+pub fn applied(nft: &dyn Nft, table: &str, rules: &str) -> Result<(), String> {
+    let ran = nft.run(&["-f", "-"], rules)?;
     if !ran.succeeded {
         return Err(format!("nft refused the ruleset: {}", ran.stderr.trim()));
     }
-    holding(nft)
+    holding(nft, table)
+}
+
+/// Whether the namespace this runs in can hold the fence's rules: the fence's ruleset
+/// put in place under [`PROBE`], read back, and taken away again.
+///
+/// # Errors
+///
+/// Why it cannot: `nft` could not run, refused the ruleset, the kernel does not list
+/// what it accepted, or the table could not be taken away again.
+pub fn probed(nft: &dyn Nft) -> Result<(), String> {
+    applied(nft, PROBE, &ruleset(PROBE, &[]))?;
+    let ran = nft.run(&["delete", "table", "inet", PROBE], "")?;
+    if !ran.succeeded {
+        return Err(format!(
+            "the table {PROBE} could not be taken away again: {}",
+            ran.stderr.trim()
+        ));
+    }
+    Ok(())
 }
 
 /// What the kernel's listing of the fence's table holds while the rules are in force.
@@ -90,22 +113,22 @@ const IN_FORCE: [&str; 5] = [
     "ip6 daddr @refused_v6 reject",
 ];
 
-/// Whether the fence's table is in force, read from the kernel.
+/// Whether `table` is in force, read from the kernel.
 ///
 /// # Errors
 ///
 /// Why it is not: `nft` could not run, the table is missing, or it lacks one of its
 /// sets, its chain, or a rule refusing either set.
-pub fn holding(nft: &dyn Nft) -> Result<(), String> {
-    let ran = nft.run(&["list", "table", "inet", TABLE], "")?;
+pub fn holding(nft: &dyn Nft, table: &str) -> Result<(), String> {
+    let ran = nft.run(&["list", "table", "inet", table], "")?;
     if !ran.succeeded {
         return Err(format!(
-            "the table {TABLE} is not in force: {}",
+            "the table {table} is not in force: {}",
             ran.stderr.trim()
         ));
     }
     match IN_FORCE.iter().find(|held| !ran.stdout.contains(*held)) {
-        Some(missing) => Err(format!("the table {TABLE} lacks {missing}")),
+        Some(missing) => Err(format!("the table {table} lacks {missing}")),
         None => Ok(()),
     }
 }

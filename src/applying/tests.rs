@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
-use super::{applied, holding, Installed, Nft, Ran};
+use super::{applied, holding, probed, Installed, Nft, Ran};
+use crate::rules::{ruleset, PROBE, TABLE};
 
 /// An `nft` answering each call with the next of `answers`, and recording what it was
 /// asked.
@@ -55,7 +56,7 @@ const LISTED: &str = "table inet lemonfiber_fence {
 fn a_ruleset_is_handed_to_nft_and_read_back_before_it_counts() {
     let nft = Fake::answering(vec![Ok(ran(true, "", "")), Ok(ran(true, LISTED, ""))]);
 
-    assert_eq!(applied(&nft, "the rules"), Ok(()));
+    assert_eq!(applied(&nft, TABLE, "the rules"), Ok(()));
     let asked = nft.asked.borrow();
     assert_eq!(
         asked.first(),
@@ -74,12 +75,12 @@ fn a_ruleset_is_handed_to_nft_and_read_back_before_it_counts() {
 fn a_ruleset_nft_refused_or_could_not_be_handed_is_not_in_force() {
     let refused = Fake::answering(vec![Ok(ran(false, "", "Error: syntax error\n"))]);
     assert_eq!(
-        applied(&refused, "x"),
+        applied(&refused, TABLE, "x"),
         Err("nft refused the ruleset: Error: syntax error".to_owned())
     );
     let missing = Fake::answering(vec![Err("nft could not be started: gone".to_owned())]);
     assert_eq!(
-        applied(&missing, "x"),
+        applied(&missing, TABLE, "x"),
         Err("nft could not be started: gone".to_owned())
     );
 }
@@ -88,11 +89,11 @@ fn a_ruleset_nft_refused_or_could_not_be_handed_is_not_in_force() {
 fn a_table_the_kernel_does_not_list_is_not_in_force() {
     let gone = Fake::answering(vec![Ok(ran(false, "", "No such file or directory\n"))]);
     assert_eq!(
-        holding(&gone),
+        holding(&gone, TABLE),
         Err("the table lemonfiber_fence is not in force: No such file or directory".to_owned())
     );
     let emptied = Fake::answering(vec![Ok(ran(true, "table inet lemonfiber_fence {\n}", ""))]);
-    assert!(holding(&emptied).is_err());
+    assert!(holding(&emptied, TABLE).is_err());
     for missing in [
         "set refused_v4",
         "set refused_v6",
@@ -103,12 +104,87 @@ fn a_table_the_kernel_does_not_list_is_not_in_force() {
         let without = LISTED.replace(missing, "");
         let held = Fake::answering(vec![Ok(ran(true, &without, ""))]);
         assert!(
-            holding(&held).is_err_and(|why| why.contains(missing)),
+            holding(&held, TABLE).is_err_and(|why| why.contains(missing)),
             "a table without {missing} is in force"
         );
     }
     let accepted_then_lost = Fake::answering(vec![Ok(ran(true, "", "")), Ok(ran(false, "", ""))]);
-    assert!(applied(&accepted_then_lost, "x").is_err());
+    assert!(applied(&accepted_then_lost, TABLE, "x").is_err());
+}
+
+/// Asking whether a namespace can hold the rules puts the fence's own ruleset in place
+/// under a table of its own, reads it back, and takes it away again.
+#[test]
+fn the_probe_installs_the_fences_rules_reads_them_back_and_takes_them_away() {
+    let nft = Fake::answering(vec![
+        Ok(ran(true, "", "")),
+        Ok(ran(true, LISTED, "")),
+        Ok(ran(true, "", "")),
+    ]);
+
+    assert_eq!(probed(&nft), Ok(()));
+    let asked = nft.asked.borrow();
+    let args: Vec<String> = asked.iter().map(|(args, _)| args.join(" ")).collect();
+    assert_eq!(
+        args,
+        [
+            "-f -".to_owned(),
+            format!("list table inet {PROBE}"),
+            format!("delete table inet {PROBE}"),
+        ]
+    );
+    assert_eq!(
+        asked.first().map(|(_, input)| input.clone()),
+        Some(ruleset(PROBE, &[]))
+    );
+}
+
+/// A namespace whose kernel refuses the rules, does not list what it accepted, or keeps
+/// the table once asked to take it away, cannot hold a fence, and says why.
+#[test]
+fn a_namespace_that_cannot_hold_the_rules_says_why() {
+    let refused = Fake::answering(vec![Ok(ran(
+        false,
+        "",
+        "Error: Could not process rule: Operation not permitted\n",
+    ))]);
+    assert_eq!(
+        probed(&refused),
+        Err(
+            "nft refused the ruleset: Error: Could not process rule: Operation not permitted"
+                .to_owned()
+        )
+    );
+    let unlisted = Fake::answering(vec![Ok(ran(true, "", "")), Ok(ran(false, "", "gone\n"))]);
+    assert_eq!(
+        probed(&unlisted),
+        Err(format!("the table {PROBE} is not in force: gone"))
+    );
+    let kept = Fake::answering(vec![
+        Ok(ran(true, "", "")),
+        Ok(ran(true, LISTED, "")),
+        Ok(ran(false, "", "Error: busy\n")),
+    ]);
+    assert_eq!(
+        probed(&kept),
+        Err(format!(
+            "the table {PROBE} could not be taken away again: Error: busy"
+        ))
+    );
+    let untaken = Fake::answering(vec![
+        Ok(ran(true, "", "")),
+        Ok(ran(true, LISTED, "")),
+        Err("nft could not be run: gone".to_owned()),
+    ]);
+    assert_eq!(
+        probed(&untaken),
+        Err("nft could not be run: gone".to_owned())
+    );
+    let missing = Fake::answering(vec![Err("nft could not be run: gone".to_owned())]);
+    assert_eq!(
+        probed(&missing),
+        Err("nft could not be run: gone".to_owned())
+    );
 }
 
 #[test]

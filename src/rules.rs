@@ -18,6 +18,10 @@ use std::net::IpAddr;
 /// The table the fence installs, by the name it is listed under.
 pub const TABLE: &str = "lemonfiber_fence";
 
+/// The table `fence nftables` installs and takes away again, so asking whether a
+/// namespace can hold the rules never touches a fence's own.
+pub const PROBE: &str = "lemonfiber_fence_probe";
+
 /// The namespace's own loopback interface.
 const LOOPBACK: &str = "lo";
 
@@ -57,9 +61,10 @@ pub fn host_addresses(said: Option<&str>) -> Result<Vec<IpAddr>, String> {
     Ok(hosts)
 }
 
-/// The ruleset, as `nft -f` reads it, refusing `hosts` beside every fixed range.
+/// The ruleset, as `nft -f` reads it, installing `table` and refusing `hosts` beside
+/// every fixed range.
 #[must_use]
-pub fn ruleset(hosts: &[IpAddr]) -> String {
+pub fn ruleset(table: &str, hosts: &[IpAddr]) -> String {
     let v4 = elements(
         lemonfiber_outward::INTERNAL_V4
             .iter()
@@ -75,9 +80,9 @@ pub fn ruleset(hosts: &[IpAddr]) -> String {
         hosts.iter().filter(|one| one.is_ipv6()),
     );
     format!(
-        "table inet {TABLE}\n\
-         delete table inet {TABLE}\n\
-         table inet {TABLE} {{\n\
+        "table inet {table}\n\
+         delete table inet {table}\n\
+         table inet {table} {{\n\
          \tset refused_v4 {{\n\
          \t\ttype ipv4_addr\n\
          \t\tflags interval\n\

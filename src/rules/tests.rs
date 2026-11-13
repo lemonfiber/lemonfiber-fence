@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use super::{host_addresses, ruleset, TABLE};
+use super::{host_addresses, ruleset, PROBE, TABLE};
 
 fn addresses(said: &[&str]) -> Vec<IpAddr> {
     said.iter().filter_map(|one| one.parse().ok()).collect()
@@ -45,7 +45,7 @@ fn an_entry_that_is_not_an_address_refuses_the_whole_list() {
 /// same list, and so is every range whose addresses carry an IPv4 one.
 #[test]
 fn every_range_nothing_reaches_is_refused_from_the_one_list() {
-    let rules = ruleset(&[]);
+    let rules = ruleset(TABLE, &[]);
     for (network, prefix) in lemonfiber_outward::INTERNAL_V4 {
         assert!(
             rules.contains(&format!("{network}/{prefix}")),
@@ -83,7 +83,7 @@ fn every_range_nothing_reaches_is_refused_from_the_one_list() {
 /// nothing else to it; answers pass before anything is refused.
 #[test]
 fn only_the_resolvers_port_passes_and_answers_pass_first() {
-    let rules = ruleset(&[]);
+    let rules = ruleset(TABLE, &[]);
     assert!(
         rules.contains("type filter hook output priority mangle;"),
         "{rules}"
@@ -100,7 +100,7 @@ fn only_the_resolvers_port_passes_and_answers_pass_first() {
 
 #[test]
 fn each_host_address_joins_the_set_of_its_family() {
-    let rules = ruleset(&addresses(&["203.0.113.7", "2001:db8::7"]));
+    let rules = ruleset(TABLE, &addresses(&["203.0.113.7", "2001:db8::7"]));
     let v4 = rules
         .split("set refused_v6")
         .next()
@@ -112,7 +112,7 @@ fn each_host_address_joins_the_set_of_its_family() {
 
 #[test]
 fn applying_it_again_replaces_the_table_rather_than_adding_beside_it() {
-    let rules = ruleset(&[]);
+    let rules = ruleset(TABLE, &[]);
     assert!(rules.starts_with(&format!(
         "table inet {TABLE}\ndelete table inet {TABLE}\ntable inet {TABLE} {{"
     )));
@@ -123,7 +123,7 @@ fn applying_it_again_replaces_the_table_rather_than_adding_beside_it() {
 /// refused.
 #[test]
 fn the_namespaces_own_loopback_passes_but_to_the_resolver() {
-    let rules = ruleset(&[]);
+    let rules = ruleset(TABLE, &[]);
     let v4 = rules.find("\toif \"lo\" ip daddr != 127.0.0.11 accept");
     let v6 = rules.find("\toif \"lo\" meta nfproto ipv6 accept");
     let refused = rules.find("ip daddr @refused_v4 reject");
@@ -131,4 +131,19 @@ fn the_namespaces_own_loopback_passes_but_to_the_resolver() {
     assert!(v6.is_some() && v6 < refused, "{rules}");
     assert!(!rules.contains("\toif \"lo\" accept"), "{rules}");
     assert!(rules.contains("127.0.0.0/8"), "{rules}");
+}
+
+/// The ruleset `fence nftables` installs is the fence's own under a table of its own.
+#[test]
+fn the_probe_installs_the_fences_ruleset_under_a_table_of_its_own() {
+    let probe = ruleset(PROBE, &[]);
+    assert_ne!(PROBE, TABLE);
+    assert!(probe.starts_with(&format!(
+        "table inet {PROBE}\ndelete table inet {PROBE}\ntable inet {PROBE} {{"
+    )));
+    assert_eq!(
+        probe.replace(PROBE, TABLE),
+        ruleset(TABLE, &[]),
+        "the probe holds another ruleset than the fence's"
+    );
 }
