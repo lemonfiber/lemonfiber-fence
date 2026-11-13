@@ -84,6 +84,16 @@ jobs:
           persist-credentials: false
       - name: Build
         run: docker build -t fence:check .
+      - name: Puts a ruleset in place, reads it back and removes it, holding NET_ADMIN alone
+        run: |
+          set -euo pipefail
+          code=0
+          said=$(docker run --rm --network none --read-only --cap-drop ALL --cap-add NET_ADMIN \
+            fence:check nftables 2>&1) || code=$?
+          if [ "$code" -ne 0 ] || [ "$said" != held ]; then
+            echo "::error::the fence's nftables probe exited ${code} and answered '${said}', not 'held'"
+            exit 1
+          fi
       - name: Holds its namespace to the rules, and answers its health
         run: |
           set -euo pipefail
