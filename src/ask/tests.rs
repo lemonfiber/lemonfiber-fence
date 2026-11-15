@@ -1,7 +1,9 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-use super::{asked, named, printed, read, Answer, Request, MOST};
+use std::time::{Duration, Instant};
+
+use super::{asked, asked_within, named, parsed, printed, Answer, Request, MOST};
 
 fn request(port: u16) -> Request {
     Request {
@@ -42,7 +44,7 @@ fn a_request_that_cannot_be_sent_as_named_is_refused_saying_what_is_wanted() {
 
 #[test]
 fn an_answer_is_read_as_its_status_content_type_and_body() {
-    let answered = read(
+    let answered = parsed(
         &b"HTTP/1.1 200 OK\r\nServer: x\r\nContent-Type: application/json\r\n\r\n{\"a\":1}"[..],
     );
     assert_eq!(
@@ -57,7 +59,7 @@ fn an_answer_is_read_as_its_status_content_type_and_body() {
 
 #[test]
 fn a_redirect_is_answered_as_itself_and_not_followed() {
-    let answered = read(&b"HTTP/1.0 302 Found\r\nLocation: http://elsewhere/\r\n\r\n"[..]);
+    let answered = parsed(&b"HTTP/1.0 302 Found\r\nLocation: http://elsewhere/\r\n\r\n"[..]);
     assert_eq!(
         answered,
         Ok(Answer {
@@ -72,15 +74,15 @@ fn a_redirect_is_answered_as_itself_and_not_followed() {
 fn a_body_longer_than_the_limit_is_cut_at_it() {
     let mut long = b"HTTP/1.0 200 OK\r\ncontent-type: text/plain\r\n\r\n".to_vec();
     long.extend(std::iter::repeat_n(b'a', MOST + 10));
-    let answered = read(long.as_slice());
+    let answered = parsed(long.as_slice());
     assert_eq!(answered.map(|answer| answer.body.len()), Ok(MOST));
 }
 
 #[test]
 fn what_is_not_an_answer_is_refused() {
-    assert!(read(&b"HTTP/1.0 200 OK\r\n"[..]).is_err());
-    assert!(read(&b"SSH-2.0-OpenSSH\r\n\r\n"[..]).is_err());
-    assert!(read(&b"HTTP/1.0 abc\r\n\r\n"[..]).is_err());
+    assert!(parsed(&b"HTTP/1.0 200 OK\r\n"[..]).is_err());
+    assert!(parsed(&b"SSH-2.0-OpenSSH\r\n\r\n"[..]).is_err());
+    assert!(parsed(&b"HTTP/1.0 abc\r\n\r\n"[..]).is_err());
 }
 
 #[test]
@@ -137,21 +139,51 @@ fn the_service_on_loopback_is_asked_the_request_and_its_answer_read() {
     );
 }
 
+/// A port nothing listens on: `tcpmux`'s, which no service on a machine running these
+/// serves, and which no test here can be handed by the system as it hands out a free one.
+const NOBODY: u16 = 1;
+
 #[test]
 fn nothing_listening_is_said() {
-    let listener = TcpListener::bind("127.0.0.1:0");
-    let port = listener
-        .as_ref()
-        .ok()
-        .and_then(|listener| listener.local_addr().ok())
-        .map(|at| at.port())
-        .unwrap_or_default();
-    drop(listener);
-    let refused = asked(&request(port));
+    let refused = asked(&request(NOBODY));
     assert!(
         refused
             .as_ref()
             .is_err_and(|why| why.starts_with("nothing answered on port")),
         "{refused:?}"
     );
+}
+
+#[test]
+fn a_service_that_trickles_its_answer_is_given_up_on_at_the_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0");
+    assert!(listener.is_ok(), "{listener:?}");
+    let Ok(listener) = listener else {
+        return;
+    };
+    let port = listener
+        .local_addr()
+        .map(|at| at.port())
+        .unwrap_or_default();
+    let dripping = std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        for byte in b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nslow"
+            .iter()
+            .cycle()
+            .take(200)
+        {
+            if stream.write_all(&[*byte]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let started = Instant::now();
+    let answered = asked_within(&request(port), Duration::from_millis(300));
+    let took = started.elapsed();
+    assert!(answered.is_err(), "{answered:?}");
+    assert!(took < Duration::from_secs(1), "gave up after {took:?}");
+    let _ = dripping.join();
 }

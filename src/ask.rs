@@ -6,9 +6,9 @@
 //! most [`MOST`] bytes of the answer, and prints its status, its `content-type` and its
 //! body, one after the other.
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The most of an answer's body that is read.
 pub const MOST: usize = 64 * 1024;
@@ -16,7 +16,7 @@ pub const MOST: usize = 64 * 1024;
 /// The most of an answer's status line and headers that is read.
 const HEAD_MOST: usize = 16 * 1024;
 
-/// How long connecting, sending and each read may take.
+/// How long the whole exchange may take, connecting, sending and reading together.
 const PATIENCE: Duration = Duration::from_secs(30);
 
 /// What separates an answer's headers from its body.
@@ -76,19 +76,25 @@ pub fn named(
     })
 }
 
-/// What the service on `127.0.0.1` at `request`'s port answered it.
+/// What the service on `127.0.0.1` at `request`'s port answered it, the whole exchange
+/// within [`PATIENCE`].
 ///
 /// # Errors
 ///
-/// Where nothing listens there, the request cannot be sent, or what came back is not an
-/// answer.
+/// Where nothing listens there, the request cannot be sent, what came back is not an
+/// answer, or the exchange outlasts [`PATIENCE`].
 pub fn asked(request: &Request) -> Result<Answer, String> {
+    asked_within(request, PATIENCE)
+}
+
+/// [`asked`], the whole exchange, connecting included, within `patience`.
+fn asked_within(request: &Request, patience: Duration) -> Result<Answer, String> {
+    let deadline = Instant::now() + patience;
     let at = SocketAddr::from((Ipv4Addr::LOCALHOST, request.port));
-    let mut stream = TcpStream::connect_timeout(&at, PATIENCE)
+    let mut stream = TcpStream::connect_timeout(&at, left(deadline)?)
         .map_err(|why| format!("nothing answered on port {}: {why}", request.port))?;
     stream
-        .set_read_timeout(Some(PATIENCE))
-        .and_then(|()| stream.set_write_timeout(Some(PATIENCE)))
+        .set_write_timeout(Some(left(deadline)?))
         .map_err(|why| why.to_string())?;
     let sent = format!(
         "{} {} HTTP/1.0\r\nHost: {at}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
@@ -97,20 +103,37 @@ pub fn asked(request: &Request) -> Result<Answer, String> {
     stream
         .write_all(sent.as_bytes())
         .map_err(|why| format!("the request could not be sent: {why}"))?;
-    read(stream)
+    let mut taken = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    while taken.len() < HEAD_MOST + MOST {
+        stream
+            .set_read_timeout(Some(left(deadline)?))
+            .map_err(|why| why.to_string())?;
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(length) => taken.extend_from_slice(chunk.get(..length).unwrap_or_default()),
+            Err(why) if why.kind() == ErrorKind::Interrupted => {}
+            Err(why) => return Err(format!("the answer could not be read: {why}")),
+        }
+    }
+    taken.truncate(HEAD_MOST + MOST);
+    parsed(&taken)
 }
 
-/// The answer `from` holds, its body cut at [`MOST`] bytes.
+/// What is left until `deadline`, or why nothing is.
+fn left(deadline: Instant) -> Result<Duration, String> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(|| "the service did not answer in the time it is given".to_owned())
+}
+
+/// The answer `taken` holds, its body cut at [`MOST`] bytes.
 ///
 /// # Errors
 ///
-/// Where it cannot be read, or holds no status line and headers.
-pub fn read(from: impl Read) -> Result<Answer, String> {
-    let mut taken = Vec::new();
-    let limit = u64::try_from(HEAD_MOST + MOST).unwrap_or(u64::MAX);
-    from.take(limit)
-        .read_to_end(&mut taken)
-        .map_err(|why| format!("the answer could not be read: {why}"))?;
+/// Where it holds no status line and headers.
+pub fn parsed(taken: &[u8]) -> Result<Answer, String> {
     let end = taken
         .windows(HEAD_END.len())
         .position(|window| window == HEAD_END)
