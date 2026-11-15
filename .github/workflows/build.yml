@@ -139,6 +139,28 @@ jobs:
                 failed=1
               fi
               exit "$failed"'
+      - name: Asks a service in the namespace it joins on loopback, holding no capability
+        run: |
+          set -euo pipefail
+          docker run -d --name fence-check-service --network container:fence-check --cap-drop ALL \
+            --entrypoint /bin/sh fence:check -c '
+              while true; do
+                printf "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nheard" | nc -l -p 8191 >/dev/null
+              done' >/dev/null
+          said=""
+          for _ in $(seq 1 10); do
+            if said=$(docker run --rm --network container:fence-check --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --memory 32m fence:check ask GET 8191 /); then
+              break
+            fi
+            sleep 1
+          done
+          docker rm -fv fence-check-service >/dev/null
+          expected=$(printf '200\ntext/plain\nheard')
+          if [ "$said" != "$expected" ]; then
+            echo "::error::fence ask printed '${said}', not the service's status, content type and body"
+            exit 1
+          fi
       - name: Refuses to start without the host's own addresses
         run: |
           set -euo pipefail

@@ -10,10 +10,13 @@
 //! `held` where all of that succeeded and why not where it did not. Run as `fence
 //! addresses`, it prints the addresses of the host whose network it is on and installs
 //! nothing. Run as `fence render-group`, it prints the id of the group owning the host's
-//! render devices, or nothing where there are none, and installs nothing.
+//! render devices, or nothing where there are none, and installs nothing. Run as `fence
+//! ask <method> <port> <path>`, it asks the service on `127.0.0.1` at that port, prints
+//! its status, its `content-type` and its body, and installs nothing.
 
 mod addresses;
 mod applying;
+mod ask;
 mod render_group;
 mod rules;
 
@@ -65,10 +68,32 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("ask") => {
+            let given: Vec<String> = std::env::args().skip(2).collect();
+            let answered = ask::named(
+                given.first().map(String::as_str),
+                given.get(1).map(String::as_str),
+                given.get(2).map(String::as_str),
+            )
+            .and_then(|request| ask::asked(&request));
+            match answered {
+                Ok(answer) => {
+                    let mut out = std::io::stdout().lock();
+                    match std::io::Write::write_all(&mut out, &ask::printed(&answer)) {
+                        Ok(()) => ExitCode::SUCCESS,
+                        Err(_) => ExitCode::FAILURE,
+                    }
+                }
+                Err(why) => {
+                    eprintln!("fence: {why}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some(other) => {
             eprintln!(
                 "fence: {other:?} is not a command; run it with none, with `health`, with \
-                 `nftables`, with `addresses` or with `render-group`"
+                 `nftables`, with `addresses`, with `render-group` or with `ask`"
             );
             ExitCode::from(2)
         }
