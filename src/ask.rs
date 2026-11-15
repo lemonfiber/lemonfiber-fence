@@ -89,43 +89,42 @@ pub fn asked(request: &Request) -> Result<Answer, String> {
 
 /// [`asked`], the whole exchange, connecting included, within `patience`.
 fn asked_within(request: &Request, patience: Duration) -> Result<Answer, String> {
-    let deadline = Instant::now() + patience;
+    let taken = exchanged(request, Instant::now() + patience)
+        .map_err(|why| format!("port {} did not answer as asked: {why}", request.port))?;
+    parsed(&taken)
+}
+
+/// What the service answered `request`, as it sent it, every step of the exchange given
+/// only what is left until `deadline`.
+fn exchanged(request: &Request, deadline: Instant) -> std::io::Result<Vec<u8>> {
     let at = SocketAddr::from((Ipv4Addr::LOCALHOST, request.port));
-    let mut stream = TcpStream::connect_timeout(&at, left(deadline)?)
-        .map_err(|why| format!("nothing answered on port {}: {why}", request.port))?;
-    stream
-        .set_write_timeout(Some(left(deadline)?))
-        .map_err(|why| why.to_string())?;
+    let mut stream = TcpStream::connect_timeout(&at, left(deadline)?)?;
+    stream.set_write_timeout(Some(left(deadline)?))?;
     let sent = format!(
         "{} {} HTTP/1.0\r\nHost: {at}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
         request.method, request.path
     );
-    stream
-        .write_all(sent.as_bytes())
-        .map_err(|why| format!("the request could not be sent: {why}"))?;
+    stream.write_all(sent.as_bytes())?;
     let mut taken = Vec::new();
     let mut chunk = [0_u8; 8192];
     while taken.len() < HEAD_MOST + MOST {
-        stream
-            .set_read_timeout(Some(left(deadline)?))
-            .map_err(|why| why.to_string())?;
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(length) => taken.extend_from_slice(chunk.get(..length).unwrap_or_default()),
-            Err(why) if why.kind() == ErrorKind::Interrupted => {}
-            Err(why) => return Err(format!("the answer could not be read: {why}")),
+        stream.set_read_timeout(Some(left(deadline)?))?;
+        let length = stream.read(&mut chunk)?;
+        if length == 0 {
+            break;
         }
+        taken.extend_from_slice(chunk.get(..length).unwrap_or_default());
     }
     taken.truncate(HEAD_MOST + MOST);
-    parsed(&taken)
+    Ok(taken)
 }
 
-/// What is left until `deadline`, or why nothing is.
-fn left(deadline: Instant) -> Result<Duration, String> {
+/// What is left until `deadline`, or the time running out where nothing is.
+fn left(deadline: Instant) -> std::io::Result<Duration> {
     deadline
         .checked_duration_since(Instant::now())
         .filter(|left| !left.is_zero())
-        .ok_or_else(|| "the service did not answer in the time it is given".to_owned())
+        .ok_or_else(|| std::io::Error::new(ErrorKind::TimedOut, "the time it is given ran out"))
 }
 
 /// The answer `taken` holds, its body cut at [`MOST`] bytes.

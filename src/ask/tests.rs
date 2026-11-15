@@ -3,7 +3,7 @@ use std::net::TcpListener;
 
 use std::time::{Duration, Instant};
 
-use super::{asked, asked_within, named, parsed, printed, Answer, Request, MOST};
+use super::{asked, asked_within, left, named, parsed, printed, Answer, Request, MOST};
 
 fn request(port: u16) -> Request {
     Request {
@@ -149,7 +149,7 @@ fn nothing_listening_is_said() {
     assert!(
         refused
             .as_ref()
-            .is_err_and(|why| why.starts_with("nothing answered on port")),
+            .is_err_and(|why| why.starts_with("port 1 did not answer as asked")),
         "{refused:?}"
     );
 }
@@ -186,4 +186,14 @@ fn a_service_that_trickles_its_answer_is_given_up_on_at_the_deadline() {
     assert!(answered.is_err(), "{answered:?}");
     assert!(took < Duration::from_secs(1), "gave up after {took:?}");
     let _ = dripping.join();
+}
+
+#[test]
+fn a_deadline_already_passed_leaves_no_time_and_says_it_ran_out() {
+    let passed = left(Instant::now());
+    assert_eq!(
+        passed.map_err(|why| why.kind()),
+        Err(std::io::ErrorKind::TimedOut)
+    );
+    assert!(left(Instant::now() + Duration::from_secs(5)).is_ok_and(|left| !left.is_zero()));
 }
