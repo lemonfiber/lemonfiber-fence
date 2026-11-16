@@ -74,7 +74,9 @@ jobs:
   # The image builds, runs with nothing but `NET_ADMIN`, as lemonfiber runs it, and
   # answers its own health check once its rules are in force. A service written into
   # its namespace on a network of its own, as the stack's are, is then refused every
-  # private address and reaches a name and the internet. Nothing is pushed.
+  # private address and reaches a name and the internet. Run as `fence stack`, a service
+  # in its namespace reaches the stack's own network and nothing beyond it. Nothing is
+  # pushed.
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -174,6 +176,76 @@ jobs:
             docker run --rm --network fence-check --cap-drop ALL --cap-add NET_ADMIN "$@" || code=$?
             if [ "$code" -ne 2 ]; then
               echo "::error::with the host's addresses ${said}, the fence exited ${code} rather than refusing to start"
+              exit 1
+            fi
+          done
+      - name: Holds a service inside the stack's networks, refusing everything beyond them
+        run: |
+          set -euo pipefail
+          docker network create --subnet 172.30.7.0/24 --gateway 172.30.7.1 fence-stack >/dev/null
+          docker run -d --name fence-stack-peer --network fence-stack --cap-drop ALL \
+            --entrypoint /bin/sh fence:check -c 'while true; do nc -l -p 8080 >/dev/null; done' >/dev/null
+          docker run -d --name fence-stack --network fence-stack --read-only \
+            --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges --dns-search . \
+            -e LEMONFIBER_FENCE_HOST_ADDRESSES=203.0.113.9 \
+            -e LEMONFIBER_FENCE_NETWORKS=172.30.7.0/24=172.30.7.1 \
+            -e LEMONFIBER_FENCE_NAMES=fence-stack-peer fence:check stack
+          healthy=no
+          for _ in $(seq 1 20); do
+            if docker exec fence-stack /usr/local/bin/fence health; then
+              healthy=yes
+              break
+            fi
+            sleep 1
+          done
+          if [ "$healthy" != yes ]; then
+            docker logs fence-stack
+            echo "::error::the stack-only fence did not report its rules in force"
+            exit 1
+          fi
+          docker run --rm --network container:fence-stack --cap-drop ALL \
+            --entrypoint /bin/sh fence:check -c '
+              failed=0
+              if ! nc -z -w 2 fence-stack-peer 8080; then
+                echo "::error::a service inside the stack was not reached by name"
+                failed=1
+              fi
+              for target in 172.30.7.1 203.0.113.9 10.0.0.1 192.168.1.1 169.254.169.254 1.1.1.1; do
+                if nc -z -w 2 "$target" 80 2>/dev/null; then
+                  echo "::error::$target was reached from inside the stack"
+                  failed=1
+                fi
+              done
+              if wget -q -T 5 -O /dev/null https://example.com 2>/dev/null; then
+                echo "::error::the internet was reached from inside the stack"
+                failed=1
+              fi
+              outside=$(nslookup example.com 2>/dev/null || true)
+              if echo "$outside" | grep -q "^Name:"; then
+                echo "::error::a name outside the stack resolved from inside it"
+                failed=1
+              fi
+              if ! nslookup fence-stack-peer 2>/dev/null | grep -q "^Address.*172\.30\.7\."; then
+                echo "::error::a service inside the stack did not resolve by name"
+                failed=1
+              fi
+              exit "$failed"'
+          docker rm -fv fence-stack fence-stack-peer >/dev/null
+          docker network rm fence-stack >/dev/null
+      - name: Refuses to hold a service inside the stack without its networks
+        run: |
+          set -euo pipefail
+          for said in unset " , " 172.30.8.0/24 172.30.8.0/24=172.30.9.1; do
+            if [ "$said" = unset ]; then
+              set -- -e LEMONFIBER_FENCE_HOST_ADDRESSES=203.0.113.9 fence:check stack
+            else
+              set -- -e LEMONFIBER_FENCE_HOST_ADDRESSES=203.0.113.9 \
+                -e "LEMONFIBER_FENCE_NETWORKS=${said}" -e LEMONFIBER_FENCE_NAMES=peer fence:check stack
+            fi
+            code=0
+            docker run --rm --network fence-check --cap-drop ALL --cap-add NET_ADMIN "$@" || code=$?
+            if [ "$code" -ne 2 ]; then
+              echo "::error::with the networks ${said}, the stack-only fence exited ${code} rather than refusing to start"
               exit 1
             fi
           done

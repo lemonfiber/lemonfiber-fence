@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use super::{applied, holding, probed, Installed, Nft, Ran};
+use super::{applied, holding, holding_either, probed, Held, Installed, Nft, Ran};
 use crate::rules::{ruleset, PROBE, TABLE};
 
 /// An `nft` answering each call with the next of `answers`, and recording what it was
@@ -56,7 +56,7 @@ const LISTED: &str = "table inet lemonfiber_fence {
 fn a_ruleset_is_handed_to_nft_and_read_back_before_it_counts() {
     let nft = Fake::answering(vec![Ok(ran(true, "", "")), Ok(ran(true, LISTED, ""))]);
 
-    assert_eq!(applied(&nft, TABLE, "the rules"), Ok(()));
+    assert_eq!(applied(&nft, TABLE, "the rules", Held::Refusing), Ok(()));
     let asked = nft.asked.borrow();
     assert_eq!(
         asked.first(),
@@ -75,12 +75,12 @@ fn a_ruleset_is_handed_to_nft_and_read_back_before_it_counts() {
 fn a_ruleset_nft_refused_or_could_not_be_handed_is_not_in_force() {
     let refused = Fake::answering(vec![Ok(ran(false, "", "Error: syntax error\n"))]);
     assert_eq!(
-        applied(&refused, TABLE, "x"),
+        applied(&refused, TABLE, "x", Held::Refusing),
         Err("nft refused the ruleset: Error: syntax error".to_owned())
     );
     let missing = Fake::answering(vec![Err("nft could not be started: gone".to_owned())]);
     assert_eq!(
-        applied(&missing, TABLE, "x"),
+        applied(&missing, TABLE, "x", Held::Refusing),
         Err("nft could not be started: gone".to_owned())
     );
 }
@@ -89,11 +89,11 @@ fn a_ruleset_nft_refused_or_could_not_be_handed_is_not_in_force() {
 fn a_table_the_kernel_does_not_list_is_not_in_force() {
     let gone = Fake::answering(vec![Ok(ran(false, "", "No such file or directory\n"))]);
     assert_eq!(
-        holding(&gone, TABLE),
+        holding(&gone, TABLE, Held::Refusing),
         Err("the table lemonfiber_fence is not in force: No such file or directory".to_owned())
     );
     let emptied = Fake::answering(vec![Ok(ran(true, "table inet lemonfiber_fence {\n}", ""))]);
-    assert!(holding(&emptied, TABLE).is_err());
+    assert!(holding(&emptied, TABLE, Held::Refusing).is_err());
     for missing in [
         "set refused_v4",
         "set refused_v6",
@@ -104,12 +104,12 @@ fn a_table_the_kernel_does_not_list_is_not_in_force() {
         let without = LISTED.replace(missing, "");
         let held = Fake::answering(vec![Ok(ran(true, &without, ""))]);
         assert!(
-            holding(&held, TABLE).is_err_and(|why| why.contains(missing)),
+            holding(&held, TABLE, Held::Refusing).is_err_and(|why| why.contains(missing)),
             "a table without {missing} is in force"
         );
     }
     let accepted_then_lost = Fake::answering(vec![Ok(ran(true, "", "")), Ok(ran(false, "", ""))]);
-    assert!(applied(&accepted_then_lost, TABLE, "x").is_err());
+    assert!(applied(&accepted_then_lost, TABLE, "x", Held::Refusing).is_err());
 }
 
 /// Asking whether a namespace can hold the rules puts the fence's own ruleset in place
@@ -200,4 +200,70 @@ fn a_program_is_handed_its_input_and_answered_with_what_it_printed() {
     assert!(absent
         .run(&[], "")
         .is_err_and(|why| why.starts_with("lemonfiber-fence-no-such-program could not be run:")));
+}
+
+/// A fence holding its service inside the stack is in force only while the kernel lists
+/// every set and rule of that ruleset, and the other ruleset's do not stand in for them.
+#[test]
+fn a_table_holding_a_service_inside_the_stack_is_in_force_only_with_its_own_rules() {
+    let inside = [
+        "set inside_v4",
+        "set inside_v6",
+        "set barred_v4",
+        "set barred_v6",
+        "chain output",
+        "ip daddr @barred_v4 reject",
+        "ip6 daddr @barred_v6 reject",
+        "ip daddr @inside_v4 accept",
+        "ip6 daddr @inside_v6 accept",
+        "chain resolving",
+        "udp dport 53 redirect to :53530",
+        "tcp dport 53 redirect to :53530",
+    ];
+    let listed = inside.join("\n");
+    let held = Fake::answering(vec![Ok(ran(true, &listed, ""))]);
+    assert_eq!(holding(&held, TABLE, Held::Inside), Ok(()));
+    let refusing = Fake::answering(vec![Ok(ran(true, LISTED, ""))]);
+    assert!(holding(&refusing, TABLE, Held::Inside).is_err());
+    for missing in inside {
+        let without = listed.replace(missing, "");
+        let held = Fake::answering(vec![Ok(ran(true, &without, ""))]);
+        assert!(
+            holding(&held, TABLE, Held::Inside).is_err_and(|why| why.contains(missing)),
+            "a table without {missing} is in force"
+        );
+    }
+}
+
+/// The health check holds either ruleset whole to be in force, so one image answers for a
+/// fenced service and a service held inside the stack, and a table holding half of each
+/// is not in force.
+#[test]
+fn health_holds_either_ruleset_whole() {
+    let refusing = Fake::answering(vec![Ok(ran(true, LISTED, ""))]);
+    assert_eq!(holding_either(&refusing, TABLE), Ok(()));
+    let inside = Fake::answering(vec![Ok(ran(
+        true,
+        "set inside_v4 set inside_v6 set barred_v4 set barred_v6 chain output \
+         ip daddr @barred_v4 reject ip6 daddr @barred_v6 reject ip daddr @inside_v4 accept \
+         ip6 daddr @inside_v6 accept chain resolving udp dport 53 redirect to :53530 \
+         tcp dport 53 redirect to :53530",
+        "",
+    ))]);
+    assert_eq!(holding_either(&inside, TABLE), Ok(()));
+    let halves = Fake::answering(vec![Ok(ran(
+        true,
+        "set refused_v4 set inside_v4 chain output",
+        "",
+    ))]);
+    assert_eq!(
+        holding_either(&halves, TABLE),
+        Err(
+            "the table lemonfiber_fence holds neither ruleset whole: it lacks set refused_v6 to \
+             refuse every private address, and set inside_v6 to hold its service inside the stack"
+                .to_owned()
+        )
+    );
+    let gone = Fake::answering(vec![Ok(ran(false, "", "No such file or directory\n"))]);
+    assert!(holding_either(&gone, TABLE).is_err());
 }

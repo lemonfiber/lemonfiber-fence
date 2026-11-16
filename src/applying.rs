@@ -71,18 +71,56 @@ fn failed(program: &str) -> impl Fn(std::io::Error) -> String + '_ {
 /// What `fence nftables` prints where the namespace it ran in held the rules.
 pub const HELD: &str = "held";
 
-/// Put `rules` in place and read `table` back.
+/// Which of the two rulesets a fence holds its namespace to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    /// Every private address and the host's own refused.
+    Refusing,
+    /// Nothing passed but what is inside the stack's networks.
+    Inside,
+}
+
+impl Held {
+    /// What the kernel's listing of the fence's table holds while these rules are in force.
+    const fn in_force(self) -> &'static [&'static str] {
+        match self {
+            Self::Refusing => &[
+                "set refused_v4",
+                "set refused_v6",
+                "chain output",
+                "ip daddr @refused_v4 reject",
+                "ip6 daddr @refused_v6 reject",
+            ],
+            Self::Inside => &[
+                "set inside_v4",
+                "set inside_v6",
+                "set barred_v4",
+                "set barred_v6",
+                "chain output",
+                "ip daddr @barred_v4 reject",
+                "ip6 daddr @barred_v6 reject",
+                "ip daddr @inside_v4 accept",
+                "ip6 daddr @inside_v6 accept",
+                "chain resolving",
+                "udp dport 53 redirect to :53530",
+                "tcp dport 53 redirect to :53530",
+            ],
+        }
+    }
+}
+
+/// Put `rules` in place and read `table` back, as `held` holds it.
 ///
 /// # Errors
 ///
 /// Why the rules are not in force: `nft` could not run, refused the ruleset, or the
 /// table is not there once it accepted it.
-pub fn applied(nft: &dyn Nft, table: &str, rules: &str) -> Result<(), String> {
+pub fn applied(nft: &dyn Nft, table: &str, rules: &str, held: Held) -> Result<(), String> {
     let ran = nft.run(&["-f", "-"], rules)?;
     if !ran.succeeded {
         return Err(format!("nft refused the ruleset: {}", ran.stderr.trim()));
     }
-    holding(nft, table)
+    holding(nft, table, held)
 }
 
 /// Whether the namespace this runs in can hold the fence's rules: the fence's ruleset
@@ -93,7 +131,7 @@ pub fn applied(nft: &dyn Nft, table: &str, rules: &str) -> Result<(), String> {
 /// Why it cannot: `nft` could not run, refused the ruleset, the kernel does not list
 /// what it accepted, or the table could not be taken away again.
 pub fn probed(nft: &dyn Nft) -> Result<(), String> {
-    applied(nft, PROBE, &ruleset(PROBE, &[]))?;
+    applied(nft, PROBE, &ruleset(PROBE, &[]), Held::Refusing)?;
     let ran = nft.run(&["delete", "table", "inet", PROBE], "")?;
     if !ran.succeeded {
         return Err(format!(
@@ -104,22 +142,46 @@ pub fn probed(nft: &dyn Nft) -> Result<(), String> {
     Ok(())
 }
 
-/// What the kernel's listing of the fence's table holds while the rules are in force.
-const IN_FORCE: [&str; 5] = [
-    "set refused_v4",
-    "set refused_v6",
-    "chain output",
-    "ip daddr @refused_v4 reject",
-    "ip6 daddr @refused_v6 reject",
-];
-
-/// Whether `table` is in force, read from the kernel.
+/// Whether `table` is in force as `held` holds it, read from the kernel.
 ///
 /// # Errors
 ///
 /// Why it is not: `nft` could not run, the table is missing, or it lacks one of its
-/// sets, its chain, or a rule refusing either set.
-pub fn holding(nft: &dyn Nft, table: &str) -> Result<(), String> {
+/// sets, its chain, or a rule over one of its sets.
+pub fn holding(nft: &dyn Nft, table: &str, held: Held) -> Result<(), String> {
+    let listing = listed(nft, table)?;
+    match lacking(&listing, held) {
+        Some(missing) => Err(format!("the table {table} lacks {missing}")),
+        None => Ok(()),
+    }
+}
+
+/// Whether `table` is in force as either ruleset holds it, read from the kernel once.
+///
+/// # Errors
+///
+/// Why it is not: `nft` could not run, the table is missing, or it holds neither ruleset
+/// whole, naming what each lacks.
+pub fn holding_either(nft: &dyn Nft, table: &str) -> Result<(), String> {
+    let listing = listed(nft, table)?;
+    match (
+        lacking(&listing, Held::Refusing),
+        lacking(&listing, Held::Inside),
+    ) {
+        (Some(refusing), Some(inside)) => Err(format!(
+            "the table {table} holds neither ruleset whole: it lacks {refusing} to refuse \
+             every private address, and {inside} to hold its service inside the stack"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The kernel's listing of `table`.
+///
+/// # Errors
+///
+/// Why there is none: `nft` could not run or the table is missing.
+fn listed(nft: &dyn Nft, table: &str) -> Result<String, String> {
     let ran = nft.run(&["list", "table", "inet", table], "")?;
     if !ran.succeeded {
         return Err(format!(
@@ -127,10 +189,15 @@ pub fn holding(nft: &dyn Nft, table: &str) -> Result<(), String> {
             ran.stderr.trim()
         ));
     }
-    match IN_FORCE.iter().find(|held| !ran.stdout.contains(*held)) {
-        Some(missing) => Err(format!("the table {table} lacks {missing}")),
-        None => Ok(()),
-    }
+    Ok(ran.stdout)
+}
+
+/// The first of what `held` holds in force that `listing` lacks, where it lacks any.
+fn lacking(listing: &str, held: Held) -> Option<&'static str> {
+    held.in_force()
+        .iter()
+        .find(|one| !listing.contains(*one))
+        .copied()
 }
 
 #[cfg(test)]
