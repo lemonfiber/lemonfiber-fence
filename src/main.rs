@@ -1,12 +1,15 @@
-//! The fence: it holds a fenced service's network namespace to rules refusing every
-//! private address, and holds nothing else.
+//! The fence: it holds a service's network namespace to rules, and holds nothing else.
 //!
-//! Run with no arguments, it reads the host addresses it is handed, puts the rules in
-//! place, reads them back, and then waits for as long as the namespace is wanted. It
-//! exits where any of that fails, so the service written behind it never starts in a
-//! namespace the rules do not hold. Run as `fence health`, it asks the kernel whether
-//! the rules are still in force. Run as `fence nftables`, it puts the same rules in place
-//! under a table of its own, reads them back and takes them away again, and prints
+//! Run with no arguments, it reads the host addresses it is handed, puts the rules
+//! refusing every private address in place, reads them back, and then waits for as long
+//! as the namespace is wanted. Run as `fence stack`, it does the same with the rules
+//! passing only what is inside the stack's networks, read from the subnets and gateways
+//! it is handed beside the host's addresses, and then answers the namespace's DNS
+//! questions itself, passing on only those for the stack's names it is handed. It exits where any of that fails, so the
+//! service written behind it never starts in a namespace the rules do not hold. Run as
+//! `fence health`, it asks the kernel whether either ruleset is still in force whole. Run
+//! as `fence nftables`, it puts the rules refusing every private address in place under a
+//! table of its own, reads them back and takes them away again, and prints
 //! `held` where all of that succeeded and why not where it did not. Run as `fence
 //! addresses`, it prints the addresses of the host whose network it is on and installs
 //! nothing. Run as `fence render-group`, it prints the id of the group owning the host's
@@ -17,7 +20,9 @@
 mod addresses;
 mod applying;
 mod ask;
+mod names;
 mod render_group;
+mod resolving;
 mod rules;
 
 use std::process::ExitCode;
@@ -25,7 +30,8 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         None => fence(),
-        Some("health") => match applying::holding(&applying::NFT, rules::TABLE) {
+        Some("stack") => held_inside(),
+        Some("health") => match applying::holding_either(&applying::NFT, rules::TABLE) {
             Ok(()) => ExitCode::SUCCESS,
             Err(why) => {
                 eprintln!("fence: {why}");
@@ -92,33 +98,85 @@ fn main() -> ExitCode {
         }
         Some(other) => {
             eprintln!(
-                "fence: {other:?} is not a command; run it with none, with `health`, with \
-                 `nftables`, with `addresses`, with `render-group` or with `ask`"
+                "fence: {other:?} is not a command; run it with none, with `stack`, with \
+                 `health`, with `nftables`, with `addresses`, with `render-group` or with \
+                 `ask`"
             );
             ExitCode::from(2)
         }
     }
 }
 
-/// Put the rules in place, then hold the namespace.
+/// Put the rules refusing every private address in place, then hold the namespace.
 fn fence() -> ExitCode {
-    let said = std::env::var(rules::HOST_ADDRESSES).ok();
-    let hosts = match rules::host_addresses(said.as_deref()) {
-        Ok(hosts) => hosts,
-        Err(why) => {
-            eprintln!("fence: {why}");
-            return ExitCode::from(2);
+    match handed(rules::HOST_ADDRESSES).and_then(|said| rules::host_addresses(said.as_deref())) {
+        Ok(hosts) => holding(
+            &rules::ruleset(rules::TABLE, &hosts),
+            applying::Held::Refusing,
+            "the namespace refuses every private address",
+        ),
+        Err(why) => refused(&why),
+    }
+}
+
+/// Put the rules passing only what is inside the stack's networks in place, then hold the
+/// namespace.
+fn held_inside() -> ExitCode {
+    let hosts =
+        handed(rules::HOST_ADDRESSES).and_then(|said| rules::host_addresses(said.as_deref()));
+    let networks = handed(rules::NETWORKS).and_then(|said| rules::networks(said.as_deref()));
+    let names = handed(names::NAMES).and_then(|said| names::names(said.as_deref()));
+    match hosts.and_then(|hosts| Ok((hosts, networks?, names?))) {
+        Ok((hosts, networks, names)) => {
+            if let Err(why) = applying::applied(
+                &applying::NFT,
+                rules::TABLE,
+                &rules::within(rules::TABLE, &networks, &hosts),
+                applying::Held::Inside,
+            ) {
+                eprintln!("fence: {why}");
+                return ExitCode::FAILURE;
+            }
+            eprintln!(
+                "fence: the namespace reaches nothing outside the stack's networks, and \
+                 resolves only the stack's names"
+            );
+            let Err(why) = resolving::answering(resolving::ANSWERING, names);
+            eprintln!("fence: cannot answer on {}: {why}", resolving::ANSWERING);
+            ExitCode::FAILURE
         }
-    };
-    if let Err(why) = applying::applied(
-        &applying::NFT,
-        rules::TABLE,
-        &rules::ruleset(rules::TABLE, &hosts),
-    ) {
+        Err(why) => refused(&why),
+    }
+}
+
+/// What the setting `name` holds, where it is set.
+///
+/// # Errors
+///
+/// Where it is set to what is not text.
+fn handed(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(said) => Ok(Some(said)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not text")),
+    }
+}
+
+/// Say why the fence does not start, and end with the exit of a fence handed what it
+/// cannot read.
+fn refused(why: &str) -> ExitCode {
+    eprintln!("fence: {why}");
+    ExitCode::from(2)
+}
+
+/// Put `ruleset` in place as `held` holds it, say `said` once it is, and hold the
+/// namespace.
+fn holding(ruleset: &str, held: applying::Held, said: &str) -> ExitCode {
+    if let Err(why) = applying::applied(&applying::NFT, rules::TABLE, ruleset, held) {
         eprintln!("fence: {why}");
         return ExitCode::FAILURE;
     }
-    eprintln!("fence: the namespace refuses every private address");
+    eprintln!("fence: {said}");
     loop {
         std::thread::park();
     }

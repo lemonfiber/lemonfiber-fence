@@ -248,7 +248,9 @@ dependencies = [
 name = "lemonfiber-fence"
 version = "0.18.0"
 dependencies = [
+ "getrandom",
  "lemonfiber-outward",
+ "socket2",
 ]
 
 [[package]]
