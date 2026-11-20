@@ -14,7 +14,7 @@ name = "fence"
 path = "src/main.rs"
 
 [dependencies]
-getrandom = "0.2.17"
+getrandom = "0.4.3"
 socket2 = { version = "0.6.5", features = ["all"] }
 # The ranges nothing reaches, from the core at the commit the train releases this build
 # with (ADR-0033), so the fence and the core's check on a name refuse the same ones.
