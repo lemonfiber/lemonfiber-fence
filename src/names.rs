@@ -117,7 +117,7 @@ pub fn names(said: Option<&str>) -> Result<BTreeSet<String>, String> {
 #[must_use]
 pub fn drawn() -> Option<u16> {
     let mut id = [0; 2];
-    getrandom::getrandom(&mut id).ok()?;
+    getrandom::fill(&mut id).ok()?;
     Some(u16::from_be_bytes(id))
 }
 
